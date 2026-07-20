@@ -77,25 +77,20 @@ pipeline {
     stage('Update Git Manifest For GitOps') {
         steps {
                 withCredentials([usernamePassword(credentialsId: "${GITHUB_CRED_ID}", passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
-                    sh """
-                    # 1. Update the Kubernetes manifest image reference cleanly using standard dots and variables
-                    sed -i "s|image: .*|image: \${AWS_ACCOUNT_ID}.dkr.ecr.\${AWS_DEFAULT_REGION}://\${IMAGE_REPO_NAME}:\${IMAGE_TAG}|g" k8s/deployment.yaml
-                    
-                    # 2. Configure Git operational parameters
-                    git config user.email "jenkins@devsecops.poc"
-                    git config user.name "Jenkins CI Engine"
-                    
-                    # 3. Stage and commit configuration adjustments
-                    git add k8s/deployment.yaml
-                    git commit -m "Automated build update: image tag v\${IMAGE_TAG} [skip ci]"
-                    
-                    # 4. Corrected Git tracking endpoint layout mapping
-                    git remote set-url origin "https://\${GIT_USERNAME}:\${GIT_PASSWORD}@://github.com/\${GIT_USERNAME}/POC-6.git"
-                    
-                    # 5. Push deployment string tracking modifications straight up to GitHub main branch
-                    git push origin HEAD:main
-                    """
-                }
+                sh """
+                sed -i "s|image: .*|image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}:${IMAGE_TAG}|g" k8s/deployment.yaml
+            
+                git config user.email "jenkins@devsecops.poc"
+                git config user.name "Jenkins CI Engine"
+            
+                git add k8s/deployment.yaml
+                git commit -m "Automated build update: image tag v${IMAGE_TAG} [skip ci]" || true
+            
+                git remote set-url origin https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/tejaravutla287/POC-6.git
+            
+                git push origin HEAD:main
+                """
+            }
             }
         }
     }
