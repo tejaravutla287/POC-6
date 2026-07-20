@@ -104,5 +104,58 @@ pipeline {
                 }
             }
         }
+        
+        stage('Automated GitOps & Helm Monitoring Setup') {
+            steps {
+                sh """
+                # 1. Provide Cluster Nodes permission to read images from ECR
+                NODE_ROLE=\$(aws iam list-roles --query "Roles[?contains(RoleName, 'monitoring_node')].RoleName" --output text)
+                aws iam attach-role-policy --role-name \$NODE_ROLE --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly || true
+
+                # 2. Deploy ArgoCD Engine
+                kubectl create namespace argocd || true
+                kubectl apply -n argocd -f https://githubusercontent.com
+                kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "NodePort"}}'
+
+                # 3. Synchronize Application via GitOps manifest
+                kubectl apply -f k8s/argocd-app.yaml
+
+                # 4. Deploy Prometheus and Grafana Suite via Helm
+                helm repo add prometheus-community https://github.io || true
+                helm repo update
+                kubectl create namespace monitoring || true
+                
+                # Install metrics collection engine throttled to fit perfectly inside the single node limits
+                helm upgrade --install kube-stack prometheus-community/kube-prometheus-stack \
+                  --namespace monitoring \
+                  --set prometheus.prometheusSpec.resources.requests.memory=500Mi \
+                  --set prometheus.prometheusSpec.resources.limits.memory=1500Mi \
+                  --set grafana.service.type=NodePort
+                  
+                echo "Waiting for pods to settle on the single node..."
+                sleep 30
+                """
+            }
+        }
+
+        stage('Display Live POC Connections') {
+            steps {
+                sh """
+                echo "=========================================================="
+                echo "🚀 LIVE POC LIFECYCLE ROUTING ENDPOINTS 🚀"
+                echo "=========================================================="
+                NODE_IP=\$(kubectl get nodes -o wide | awk 'NR==2 {print \$7}')
+                GRAFANA_PORT=\$(kubectl get svc -n monitoring kube-stack-grafana -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
+                ARGOCD_PORT=\$(kubectl get svc -n argocd argocd-server -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
+                GRAFANA_PASS=\$(kubectl get secret -n monitoring kube-stack-grafana -o jsonpath="{.data.admin-password}" | base64 --decode)
+                
+                echo "🎬 APPLICATION URL:  http://\${NODE_IP}:32080"
+                echo "🐙 ARGOCD WEB PORTAL: http://\${NODE_IP}:\${ARGOCD_PORT}"
+                echo "📊 GRAFANA DASHBOARD: http://\${NODE_IP}:\${GRAFANA_PORT}"
+                echo "🔑 GRAFANA PASSWORD:  \${GRAFANA_PASS} (User: admin)"
+                echo "=========================================================="
+                """
+            }
+        }
     }
 }
