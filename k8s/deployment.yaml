@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prime-clone
+  labels:
+    app: prime-clone
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prime-clone
+  template:
+    metadata:
+      labels:
+        app: prime-clone
+    spec:
+      containers:
+      - name: prime-clone
+        image: REPLACE_WITH_YOUR_ACCOUNT_://amazonaws.com
+        ports:
+        - containerPort: 80
