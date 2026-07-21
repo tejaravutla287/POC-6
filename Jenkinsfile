@@ -64,8 +64,8 @@ pipeline {
             steps {
                 withCredentials([usernamePassword(credentialsId: "${GITHUB_CRED_ID}", passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
                     sh """
-                    # 1. Update the Kubernetes manifest image reference using explicit variables
-                    sed -i "s|image: .*|image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}://{IMAGE_REPO_NAME}:${IMAGE_TAG}|g" k8s/deployment.yaml
+                    # FIXED: Corrected domain format mapping using a forward slash and dollar variable sign prefix
+                    sed -i "s|image: .*|image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}:${IMAGE_TAG}|g" k8s/deployment.yaml
                     
                     # 2. Configure Git operational profiles
                     git config user.email "jenkins@devsecops.poc"
@@ -75,7 +75,7 @@ pipeline {
                     git add k8s/deployment.yaml
                     git commit -m "Automated build update: image tag v${IMAGE_TAG} [skip ci]" || true
                     
-                    # 4. FIXED: Clean, properly structured Git authentication routing string
+                    # 4. Clean, properly structured Git authentication routing string
                     git remote set-url origin "https://\${GIT_USERNAME}:\${GIT_PASSWORD}@github.com/\${GIT_USERNAME}/POC-6.git"
                     
                     # 5. Push deployment manifest changes straight up to GitHub main branch
@@ -84,7 +84,6 @@ pipeline {
                 }
             }
         }
-
 
         stage('Deploy GitOps & Helm Monitoring') {
             steps {
@@ -124,7 +123,7 @@ pipeline {
                 # Create monitoring namespace
                 kubectl create namespace monitoring || true
         
-                # Install Prometheus + Grafana
+                # Install Prometheus + Grafana inside the cluster node
                 helm upgrade --install kube-stack \
                   prometheus-community/kube-prometheus-stack \
                   --namespace monitoring \
@@ -135,9 +134,11 @@ pipeline {
                 # Verification
                 kubectl get pods -n argocd
                 kubectl get pods -n monitoring
+                kubectl get pods -n default
                 '''
             }
         }
+        
         stage('Display Live Entry Details') {
             steps {
                 sh '''
@@ -145,14 +146,12 @@ pipeline {
                 echo "DEVSECOPS POC LIFECYCLE CONNECTIONS"
                 echo "=========================================================="
         
-                NODE_IP=$(aws ec2 describe-instances \
-                --filters "Name=instance-state-name,Values=running" \
-                --query "Reservations[*].Instances[*].PublicIpAddress" \
-                --output text | head -1)
+                # Fetches the External IP of the single EKS node group cleanly
+                NODE_IP=$(kubectl get nodes -o wide | awk 'NR==2 {print $7}')
         
                 ARGOCD_PORT=$(kubectl get svc argocd-server -n argocd -o jsonpath="{.spec.ports[0].nodePort}" 2>/dev/null || echo "N/A")
         
-                GRAFANA_PORT=$(kubectl get svc -n monitoring kube-stack-grafana -o jsonpath="{.spec.ports[0].nodePort}" 2>/dev/null || echo "N/A")
+                GRAFANA_PORT=$(kubectl get svc kube-stack-grafana -n monitoring -o jsonpath="{.spec.ports[0].nodePort}" 2>/dev/null || echo "N/A")
         
                 GRAFANA_PASS=$(kubectl get secret -n monitoring kube-stack-grafana -o jsonpath="{.data.admin-password}" 2>/dev/null | base64 --decode || echo "N/A")
         
