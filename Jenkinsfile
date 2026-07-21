@@ -47,13 +47,15 @@ pipeline {
         stage('SonarQube Scan') {
             steps {
                 script {
-                        withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                    def scannerHome = tool 'sonar-scanner'
+        
+                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
                         sh """
                         ${scannerHome}/bin/sonar-scanner \
                         -Dsonar.projectKey=prime-clone \
                         -Dsonar.sources=. \
                         -Dsonar.host.url=http://54.162.144.178:9000 \
-                        -Dsonar.login=$SONAR_TOKEN
+                        -Dsonar.login=${SONAR_TOKEN}
                         """
                     }
                 }
