@@ -6,9 +6,11 @@ module "eks" {
   cluster_version = "1.30"
 
   vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnets
+  
+  # CRITICAL CHANGE: Launch nodes into public subnets to gain a true Public IP
+  subnet_ids = module.vpc.public_subnets
 
-  cluster_endpoint_public_access = true
+  cluster_endpoint_public_access           = true
   enable_cluster_creator_admin_permissions = true
 
   eks_managed_node_groups = {
@@ -16,9 +18,11 @@ module "eks" {
       min_size       = 1
       max_size       = 1
       desired_size   = 1
-      instance_types = ["c7i-flex.large"] # 2 vCPUs, 4 GiB RAM
+      instance_types = ["c7i-flex.large"]
 
-      # Unique naming strategy to resolve the Degraded AccessDenied bug
+      # CRITICAL CHANGE: Instructs AWS to assign a real Public IP on boot
+      associate_public_ip_address = true
+
       iam_role_use_name_prefix = true
       iam_role_name            = "eks-node-poc-unique-role"
       
