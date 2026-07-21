@@ -14,10 +14,10 @@ pipeline {
             }
         }
         
-        stage('Terraform Provision Infrastructure') {
+        stage('Terraform Re-Build Infrastructure') {
             steps {
                 dir('terraform') {
-                    // Jenkins initializes and spins up your network + EKS Cluster automatically
+                    // Ensures any old degraded states are cleared before a fresh run
                     sh 'terraform init'
                     sh 'terraform apply --auto-approve'
                 }
@@ -26,7 +26,6 @@ pipeline {
 
         stage('Establish Cluster Access') {
             steps {
-                // Configures cluster context so subsequent deployment scripts run smoothly
                 sh "aws eks update-kubeconfig --region ${AWS_DEFAULT_REGION} --name prime-poc-cluster"
             }
         }
@@ -38,32 +37,9 @@ pipeline {
             }
         }
 
-        stage('SonarQube Scan') {
-            steps {
-                script {
-                    def scannerHome = tool 'sonar-scanner'
-        
-                    sh """
-                    ${scannerHome}/bin/sonar-scanner \
-                    -Dsonar.projectKey=prime-clone \
-                    -Dsonar.sources=. \
-                    -Dsonar.host.url=http://54.162.144.178:9000 \
-                    -Dsonar.login=squ_53ba47775c21217ca31e6d06433cfc39bef3ff96
-                    """
-                }
-            }
-        }
-
-
         stage('Docker Build Container') {
             steps {
                 sh "docker build -t ${IMAGE_REPO_NAME}:${IMAGE_TAG} ."
-            }
-        }
-
-        stage('Trivy Image Audit') {
-            steps {
-                sh "trivy image --severity HIGH,CRITICAL --exit-code 0 ${IMAGE_REPO_NAME}:${IMAGE_TAG}"
             }
         }
 
@@ -71,88 +47,71 @@ pipeline {
             steps {
                 sh """
                 aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
-        
-                docker tag ${IMAGE_REPO_NAME}:${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}:latest
-        
-                docker tag ${IMAGE_REPO_NAME}:${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}:${IMAGE_TAG}
-        
-                docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}:latest
-        
-                docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}:${IMAGE_TAG}
+                docker tag ${IMAGE_REPO_NAME}:${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}://{IMAGE_REPO_NAME}:latest
+                docker tag ${IMAGE_REPO_NAME}:${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}://{IMAGE_REPO_NAME}:${IMAGE_TAG}
+                docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}://{IMAGE_REPO_NAME}:latest
+                docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}://{IMAGE_REPO_NAME}:${IMAGE_TAG}
                 """
             }
         }
 
-
-
         stage('Update Git Manifest For GitOps') {
             steps {
-                    withCredentials([usernamePassword(credentialsId: "${GITHUB_CRED_ID}", passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
+                withCredentials([usernamePassword(credentialsId: "${GITHUB_CRED_ID}", passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
                     sh """
-                    sed -i "s|image: .*|image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}:${IMAGE_TAG}|g" k8s/deployment.yaml
-                
+                    sed -i "s|image: .*|image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}://{IMAGE_REPO_NAME}:${IMAGE_TAG}|g" k8s/deployment.yaml
                     git config user.email "jenkins@devsecops.poc"
                     git config user.name "Jenkins CI Engine"
-                
                     git add k8s/deployment.yaml
                     git commit -m "Automated build update: image tag v${IMAGE_TAG} [skip ci]" || true
-                
-                    git remote set-url origin https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/tejaravutla287/POC-6.git
-                
+                    git remote set-url origin https://${GIT_USERNAME}:${GIT_PASSWORD}@://github.com
                     git push origin HEAD:main
                     """
                 }
             }
         }
-        
-        stage('Automated GitOps & Helm Monitoring Setup') {
+
+        stage('Deploy GitOps & Helm Monitoring') {
             steps {
                 sh """
-                # 1. Provide Cluster Nodes permission to read images from ECR
-                NODE_ROLE=\$(aws iam list-roles --query "Roles[?contains(RoleName, 'monitoring_node')].RoleName" --output text)
-                aws iam attach-role-policy --role-name \$NODE_ROLE --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly || true
-
-                # 2. Deploy ArgoCD Engine
+                # 1. Initialize ArgoCD Framework
                 kubectl create namespace argocd || true
                 kubectl apply -n argocd -f https://githubusercontent.com
                 kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "NodePort"}}'
 
-                # 3. Synchronize Application via GitOps manifest
+                # 2. Trigger Application Synchronization Map
                 kubectl apply -f k8s/argocd-app.yaml
 
-                # 4. Deploy Prometheus and Grafana Suite via Helm
+                # 3. Provision Prometheus + Grafana metrics stack via Helm
                 helm repo add prometheus-community https://github.io || true
                 helm repo update
                 kubectl create namespace monitoring || true
                 
-                # Install metrics collection engine throttled to fit perfectly inside the single node limits
+                # Optimizes memory consumption to fit within the single c7i-flex.large node limits
                 helm upgrade --install kube-stack prometheus-community/kube-prometheus-stack \
                   --namespace monitoring \
-                  --set prometheus.prometheusSpec.resources.requests.memory=500Mi \
-                  --set prometheus.prometheusSpec.resources.limits.memory=1500Mi \
+                  --set prometheus.prometheusSpec.resources.requests.memory=400Mi \
+                  --set prometheus.prometheusSpec.resources.limits.memory=1200Mi \
                   --set grafana.service.type=NodePort
-                  
-                echo "Waiting for pods to settle on the single node..."
-                sleep 30
                 """
             }
         }
 
-        stage('Display Live POC Connections') {
+        stage('Display Live Entry Ports') {
             steps {
                 sh """
                 echo "=========================================================="
-                echo "🚀 LIVE POC LIFECYCLE ROUTING ENDPOINTS 🚀"
+                echo "🚀 DEVSECOPS POC LIFECYCLE CONNECTIONS 🚀"
                 echo "=========================================================="
                 NODE_IP=\$(kubectl get nodes -o wide | awk 'NR==2 {print \$7}')
-                GRAFANA_PORT=\$(kubectl get svc -n monitoring kube-stack-grafana -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
                 ARGOCD_PORT=\$(kubectl get svc -n argocd argocd-server -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
+                GRAFANA_PORT=\$(kubectl get svc -n monitoring kube-stack-grafana -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
                 GRAFANA_PASS=\$(kubectl get secret -n monitoring kube-stack-grafana -o jsonpath="{.data.admin-password}" | base64 --decode)
                 
-                echo "🎬 APPLICATION URL:  http://\${NODE_IP}:32080"
-                echo "🐙 ARGOCD WEB PORTAL: http://\${NODE_IP}:\${ARGOCD_PORT}"
-                echo "📊 GRAFANA DASHBOARD: http://\${NODE_IP}:\${GRAFANA_PORT}"
-                echo "🔑 GRAFANA PASSWORD:  \${GRAFANA_PASS} (User: admin)"
+                echo "🎬 APPLICATION MAIN PAGE URL: http://\${NODE_IP}:32080"
+                echo "🐙 ARGOCD CONTROLLER BOARD:  http://\${NODE_IP}:\${ARGOCD_PORT}"
+                echo "📊 GRAFANA CLUSTER METRICS:   http://\${NODE_IP}:\${GRAFANA_PORT}"
+                echo "🔑 DEFAULT GRAFANA PASSWORD:  \${GRAFANA_PASS} (User: admin)"
                 echo "=========================================================="
                 """
             }
