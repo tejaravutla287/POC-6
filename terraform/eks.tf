@@ -6,12 +6,15 @@ module "eks" {
   cluster_version = "1.30"
 
   vpc_id     = module.vpc.vpc_id
-  
-  # CRITICAL CHANGE: Launch nodes into public subnets to gain a true Public IP
-  subnet_ids = module.vpc.public_subnets
+  subnet_ids = module.vpc.public_subnets # Keeps worker nodes inside the public layer
 
   cluster_endpoint_public_access           = true
+  
+  # CRITICAL FIX 1: Automatically injects your IAM User permissions into the cluster core database
   enable_cluster_creator_admin_permissions = true
+
+  # CRITICAL FIX 2: Grants EKS permission to read and authenticate node security groups natively
+  authentication_mode = "API_AND_CONFIG_MAP"
 
   eks_managed_node_groups = {
     monitoring_node = {
@@ -20,7 +23,6 @@ module "eks" {
       desired_size   = 1
       instance_types = ["c7i-flex.large"]
 
-      # CRITICAL CHANGE: Instructs AWS to assign a real Public IP on boot
       associate_public_ip_address = true
 
       iam_role_use_name_prefix = true
