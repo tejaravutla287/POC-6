@@ -64,19 +64,27 @@ pipeline {
             steps {
                 withCredentials([usernamePassword(credentialsId: "${GITHUB_CRED_ID}", passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
                     sh """
-                    # Swap the deployment manifest container string to point to the newest build tag
+                    # 1. Update the Kubernetes manifest image reference using explicit variables
                     sed -i "s|image: .*|image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}://{IMAGE_REPO_NAME}:${IMAGE_TAG}|g" k8s/deployment.yaml
                     
+                    # 2. Configure Git operational profiles
                     git config user.email "jenkins@devsecops.poc"
                     git config user.name "Jenkins CI Engine"
+                    
+                    # 3. Stage and commit configuration adjustments
                     git add k8s/deployment.yaml
                     git commit -m "Automated build update: image tag v${IMAGE_TAG} [skip ci]" || true
-                    git remote set-url origin https://${GIT_USERNAME}:${GIT_PASSWORD}@://github.com
+                    
+                    # 4. FIXED: Clean, properly structured Git authentication routing string
+                    git remote set-url origin "https://\${GIT_USERNAME}:\${GIT_PASSWORD}@github.com/\${GIT_USERNAME}/POC-6.git"
+                    
+                    # 5. Push deployment manifest changes straight up to GitHub main branch
                     git push origin HEAD:main
                     """
                 }
             }
         }
+
 
         stage('Deploy GitOps & Helm Monitoring') {
             steps {
