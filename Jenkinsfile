@@ -43,6 +43,40 @@ pipeline {
                 sh "docker build -t ${IMAGE_REPO_NAME}:${IMAGE_TAG} ."
             }
         }
+        
+        stage('SonarQube Scan') {
+            steps {
+                script {
+                        withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                        sh """
+                        ${scannerHome}/bin/sonar-scanner \
+                        -Dsonar.projectKey=prime-clone \
+                        -Dsonar.sources=. \
+                        -Dsonar.host.url=http://54.162.144.178:9000 \
+                        -Dsonar.login=$SONAR_TOKEN
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Trivy Scan') {
+            steps {
+                script {
+                    // Run Trivy scan using Docker
+                    sh """
+                        docker run --rm \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        -v \$(pwd):/root/.cache/ \
+                        aquasec/trivy:latest image \
+                        --exit-code 1 \
+                        --severity HIGH,CRITICAL \
+                        --format table \
+                        ${IMAGE_NAME} | tee ${REPORT_FILE}
+                    """
+                }
+            }
+        }
 
         stage('Push Image to AWS ECR') {
             steps {
