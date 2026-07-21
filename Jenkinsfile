@@ -143,23 +143,37 @@ pipeline {
             steps {
                 sh '''
                 echo "=========================================================="
-                echo "DEVSECOPS POC LIFECYCLE CONNECTIONS"
+                echo "🚀 DEVSECOPS POC LIFECYCLE CONNECTIONS 🚀"
                 echo "=========================================================="
         
-                # Fetches the External IP of the single EKS node group cleanly
-                NODE_IP=$(kubectl get nodes -o wide | awk 'NR==2 {print $7}')
+                # 1. Direct query to AWS EC2 API using EKS cluster tags to isolate the node's public IP
+                NODE_IP=$(aws ec2 describe-instances \
+                  --filters "Name=instance-state-name,Values=running" \
+                            "Name=tag:kubernetes.io/cluster/prime-poc-cluster,Values=owned" \
+                  --query "Reservations[*].Instances[*].PublicIpAddress" \
+                  --output text | head -n1)
+                
+                # Fallback check if the node is entirely private without an elastic public IP mapping
+                if [ -z "$NODE_IP" ] || [ "$NODE_IP" == "None" ]; then
+                    echo "Public IP not found via cluster tags. Searching by instance type..."
+                    NODE_IP=$(aws ec2 describe-instances \
+                      --filters "Name=instance-state-name,Values=running" \
+                                "Name=instance-type,Values=c7i-flex.large" \
+                      --query "Reservations[*].Instances[*].PublicIpAddress" \
+                      --output text | head -n1)
+                fi
         
+                # 2. Extract service NodePorts natively from inside the EKS cluster configurations
                 ARGOCD_PORT=$(kubectl get svc argocd-server -n argocd -o jsonpath="{.spec.ports[0].nodePort}" 2>/dev/null || echo "N/A")
-        
                 GRAFANA_PORT=$(kubectl get svc kube-stack-grafana -n monitoring -o jsonpath="{.spec.ports[0].nodePort}" 2>/dev/null || echo "N/A")
-        
                 GRAFANA_PASS=$(kubectl get secret -n monitoring kube-stack-grafana -o jsonpath="{.data.admin-password}" 2>/dev/null | base64 --decode || echo "N/A")
         
-                echo "Application URL : http://${NODE_IP}:32080"
-                echo "ArgoCD URL      : http://${NODE_IP}:${ARGOCD_PORT}"
-                echo "Grafana URL     : http://${NODE_IP}:${GRAFANA_PORT}"
-                echo "Grafana User    : admin"
-                echo "Grafana Password: ${GRAFANA_PASS}"
+                # 3. Print out clean, click-ready browser navigation routes
+                echo "🎬 Application URL : http://${NODE_IP}:32080"
+                echo "🐙 ArgoCD URL      : http://${NODE_IP}:${ARGOCD_PORT}"
+                echo "📊 Grafana URL     : http://${NODE_IP}:${GRAFANA_PORT}"
+                echo "👤 Grafana User    : admin"
+                echo "🔑 Grafana Password: ${GRAFANA_PASS}"
         
                 echo "=========================================================="
                 '''
