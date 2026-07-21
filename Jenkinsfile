@@ -89,38 +89,55 @@ pipeline {
         stage('Deploy GitOps & Helm Monitoring') {
             steps {
                 sh '''
+                # Grant EKS nodes permission to pull images from ECR
                 NODE_ROLE=$(aws iam list-roles --query "Roles[?contains(RoleName, 'monitoring_node')].RoleName" --output text)
         
                 aws iam attach-role-policy \
                   --role-name $NODE_ROLE \
                   --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly || true
         
+                # Create ArgoCD namespace
                 kubectl create namespace argocd || true
         
-                kubectl apply -n argocd \
-                  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+                # Install ArgoCD using server-side apply
+                kubectl apply --server-side -n argocd \
+                  -f https://raw.githubusercontent.com/argoproj/argo-cd/v2.11.7/manifests/install.yaml || true
         
-                kubectl patch svc argocd-server -n argocd \
-                  -p '{"spec":{"type":"NodePort"}}'
+                # Wait for ArgoCD resources
+                kubectl wait --for=condition=available deployment/argocd-server \
+                  -n argocd --timeout=300s || true
         
-                kubectl apply -f k8s/argocd-app.yaml
+                # Expose ArgoCD UI
+                kubectl patch svc argocd-server \
+                  -n argocd \
+                  -p '{"spec":{"type":"NodePort"}}' || true
         
+                # Deploy GitOps application
+                kubectl apply -f k8s/argocd-app.yaml || true
+        
+                # Add Prometheus Helm repo
                 helm repo add prometheus-community \
                   https://prometheus-community.github.io/helm-charts || true
         
                 helm repo update
         
+                # Create monitoring namespace
                 kubectl create namespace monitoring || true
         
-                helm upgrade --install kube-stack prometheus-community/kube-prometheus-stack \
+                # Install Prometheus + Grafana
+                helm upgrade --install kube-stack \
+                  prometheus-community/kube-prometheus-stack \
                   --namespace monitoring \
                   --set prometheus.prometheusSpec.resources.requests.memory=400Mi \
                   --set prometheus.prometheusSpec.resources.limits.memory=1200Mi \
                   --set grafana.service.type=NodePort
+        
+                # Verification
+                kubectl get pods -n argocd
+                kubectl get pods -n monitoring
                 '''
             }
-}
-
+        }
         stage('Display Live Entry Details') {
             steps {
                 sh """
